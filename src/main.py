@@ -10,6 +10,9 @@ from VolumeRendering import VolumeRendering
 
 import numpy as np
 
+import logging
+logger = logging.getLogger('pctErrorAnalyst[' + __name__ + ']')
+
 def generateCompareSelection():
     widget = QWidget()
 
@@ -36,6 +39,14 @@ def generateCompareSelection():
     return widget
 
 def main():
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
     app = QApplication(sys.argv)
 
     window = QMainWindow()
@@ -54,7 +65,10 @@ def main():
     rendering = QLabel("VTK Rendering", alignment=Qt.AlignCenter)
     layout.addWidget(rendering)
 
-    layout.addWidget(VolumeRendering())
+    renderer = VolumeRendering()
+    layout.addWidget(renderer)
+
+    
 
     window.show()
 

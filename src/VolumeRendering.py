@@ -1,7 +1,10 @@
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+import vtkmodules.vtkRenderingOpenGL2
+import vtkmodules.vtkInteractionStyle
 
+from vtkmodules.vtkFiltersSources import vtkConeSource
 from vtkmodules.vtkCommonColor import vtkNamedColors
 from vtkmodules.vtkCommonDataModel import vtkPlanes
 from vtkmodules.vtkFiltersGeneral import vtkShrinkPolyData
@@ -22,65 +25,24 @@ class VolumeRendering(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
-        widget = QVTKRenderWindowInteractor()
+        renderer = QVTKRenderWindowInteractor(self)
+        layout.addWidget(renderer)
 
-        layout.addWidget(widget)
+        ren = vtkRenderer()
+        renderer.GetRenderWindow().AddRenderer(ren)
 
-        renwin = widget.GetRenderWindow()
+        cone = vtkConeSource()
+        cone.SetResolution(8)
 
-        colors = vtkNamedColors()
+        coneMapper = vtkPolyDataMapper()
+        coneMapper.SetInputConnection(cone.GetOutputPort())
 
-        camera = vtkCamera()
-        camera.SetClippingRange(0.1, 0.4)
-        planesArray = [0] * 24
+        coneActor = vtkActor()
+        coneActor.SetMapper(coneMapper)
 
-        camera.GetFrustumPlanes(1.0, planesArray)
+        ren.AddActor(coneActor)
 
-        planes = vtkPlanes()
-        planes.SetFrustumPlanes(planesArray)
+        # show the widget
 
-        frustumSource = vtkFrustumSource()
-        frustumSource.ShowLinesOff()
-        frustumSource.SetPlanes(planes)
-
-        shrink = vtkShrinkPolyData()
-        shrink.SetInputConnection(frustumSource.GetOutputPort())
-        shrink.SetShrinkFactor(.9)
-
-        mapper = vtkPolyDataMapper()
-        mapper.SetInputConnection(shrink.GetOutputPort())
-
-        back = vtkProperty()
-        back.SetColor(colors.GetColor3d("Tomato"))
-
-        actor = vtkActor()
-        actor.SetMapper(mapper)
-        actor.GetProperty().EdgeVisibilityOn()
-        actor.GetProperty().SetColor(colors.GetColor3d("Banana"))
-        actor.SetBackfaceProperty(back)
-
-        # a renderer and render window
-        renderer = vtkRenderer()
-        renwin.AddRenderer(renderer)
-
-        # an interactor
-        renderWindowInteractor = vtkRenderWindowInteractor()
-        renderWindowInteractor.SetRenderWindow(renwin)
-
-        # add the actors to the scene
-        renderer.AddActor(actor)
-        renderer.SetBackground(colors.GetColor3d("Silver"))
-
-        # Position the camera so that we can see the frustum
-        renderer.GetActiveCamera().SetPosition(1, 0, 0)
-        renderer.GetActiveCamera().SetFocalPoint(0, 0, 0)
-        renderer.GetActiveCamera().SetViewUp(0, 1, 0)
-        renderer.GetActiveCamera().Azimuth(30)
-        renderer.GetActiveCamera().Elevation(30)
-        renderer.ResetCamera()
-
-        # render an image (lights and cameras are created automatically)
-        renwin.Render()
-
-        widget.Initialize()
-        widget.Start()
+        renderer.Initialize()
+        renderer.Start()
