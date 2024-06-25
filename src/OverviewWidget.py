@@ -1,8 +1,8 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QHBoxLayout, QVBoxLayout, QComboBox
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
 
 import numpy as np
-import scipy
+import metrics
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -16,9 +16,18 @@ import logging
 logger = logging.getLogger('pctErrorAnalyst[' + __name__ +']')
 
 class OverviewWidget(QWidget):
+    baseChanged = pyqtSignal(int, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        self.availableMetrics = ['wasserstein', 'kullback-leibler']
+        self.availableFilters = ['ramp', 'cosine', 'hamming', 'hann', 'shepp-logan']
+        self.availableAngles = [int( 180 * angle / 16) for angle in np.arange(8, 17)]
+
+        self.baseAngle = 90
+        self.baseFilter = 'ramp'
+        self.metric = 'wasserstein'
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -32,17 +41,14 @@ class OverviewWidget(QWidget):
         self.layout.addWidget(self.generateBaseSelection())
 
 
-    def generateData(self, metric='wasserstein', baseIdx=[0,0]):
-        availableFilters = ['ramp', 'cosine', 'hamming', 'hann', 'shepp-logan']
-        availableAngles = [int( 180 * angle / 16) for angle in np.arange(8, 17)]
-
-        meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(availableAngles[baseIdx[1]], availableFilters[baseIdx[0]]))
-        varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(availableAngles[baseIdx[1]], availableFilters[baseIdx[0]]))
+    def generateData(self):
+        meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.baseAngle, self.baseFilter))
+        varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.baseAngle, self.baseFilter))
 
         self.data = np.zeros((5,9))
-        for idx,filter in enumerate(availableFilters):
-            for jdx,angle in enumerate(availableAngles):
-                if baseIdx[0] == idx and baseIdx[1] == jdx:
+        for idx,filter in enumerate(self.availableFilters):
+            for jdx,angle in enumerate(self.availableAngles):
+                if self.baseAngle == angle and self.baseFilter == filter:
                     continue
 
                 logger.info('Processing {:s}, {:d}'.format(filter, angle))
@@ -50,8 +56,12 @@ class OverviewWidget(QWidget):
                 mean = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(angle, filter))
                 variance = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(angle, filter))
 
-                if metric == 'wasserstein':
-                    self.data[idx, jdx] = self.wasserstein_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
+                if self.metric == 'wasserstein':
+                    self.data[idx, jdx] = metrics.wasserstein_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
+                elif self.metric == 'kullback-leibler':
+                    self.data[idx, jdx] = metrics.kullback_leibler_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
+                else:
+                    self.data[idx, jdx] = metrics.wasserstein_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
 
     
     def createFigure(self):
@@ -62,12 +72,21 @@ class OverviewWidget(QWidget):
         img = self.axes.imshow(self.data)
         self.axes.set_xticks(np.arange(9))
         self.axes.set_xticklabels(['{:d}'.format(int( 180 * angle / 16)) for angle in np.arange(8, 17)])
+        self.axes.set_xlabel('Number of scans')
 
         self.axes.set_yticks(np.arange(5))
         self.axes.set_yticklabels(['ramp', 'cosine', 'hamming', 'hann', 'shepp-logan'])
+        self.axes.set_ylabel('Filter')
 
         self.caxes = fig.add_subplot(gs[0,0])
-        self.cbar = Colorbar(self.caxes, img, orientation='horizontal', ticklocation='top', label=r'$W_2$')
+        self.cbar = Colorbar(self.caxes, img, orientation='horizontal', ticklocation='top')
+
+        if self.metric == 'wasserstein':
+            self.cbar.set_label(r'$W_2$')
+        elif self.metric == 'kullback-leibler':
+            self.cbar.set_label(r'$D_{KL}$')
+        else:
+            self.cbar.set_label(r'$W_2$')
 
         return fig
 
@@ -87,13 +106,13 @@ class OverviewWidget(QWidget):
         self.filterSelection.addItem('hann')
         self.filterSelection.addItem('shepp-logan')
         layout.addWidget(self.filterSelection)
-        self.filterSelection.currentIndexChanged.connect(self.baseChanged)
+        self.filterSelection.currentIndexChanged.connect(self.on_baseChanged)
 
         self.angleSelection = QComboBox()
         for angle in np.linspace(90, 180, 9, True):
             self.angleSelection.addItem('{:d}°'.format(int(angle)))
         layout.addWidget(self.angleSelection)
-        self.angleSelection.currentIndexChanged.connect(self.baseChanged)
+        self.angleSelection.currentIndexChanged.connect(self.on_baseChanged)
 
         layout.addStretch()
 
@@ -103,34 +122,25 @@ class OverviewWidget(QWidget):
         self.metricSelection = QComboBox()
         self.metricSelection.addItem('Wasserstein')
         self.metricSelection.addItem('Kullback-Leibler')
-        self.metricSelection.addItem('Total-Variation')
-        self.metricSelection.addItem('contrast to noise')
         layout.addWidget(self.metricSelection)
-        self.metricSelection.currentIndexChanged.connect(self.baseChanged)
+        self.metricSelection.currentIndexChanged.connect(self.on_baseChanged)
 
         return widget
     
-    def baseChanged(self, newIndex):
+    @pyqtSlot(int)
+    def on_baseChanged(self, newIndex):
         metricIdx = self.metricSelection.currentIndex()
-        availableMetrics = ['wasserstein', 'kullback-leibler', 'total-variation', 'contrast-to-noise']
-        metric = availableMetrics[metricIdx]
+        self.metric = self.availableMetrics[metricIdx]
 
-        newBase = [
-            self.filterSelection.currentIndex(),
-            self.angleSelection.currentIndex()
-        ]
-        logger.info('Base changed: {:d},{:d} with {:s}.'.format(newBase[0], newBase[1], metric))
-        self.generateData(metric=metric, baseIdx=newBase)
+        self.baseAngle = self.availableAngles[ self.angleSelection.currentIndex() ]
+        self.baseFilter = self.availableFilters[ self.filterSelection.currentIndex() ]
+
+        logger.info('Base changed: {:s},{:d} with {:s}.'.format(self.baseFilter, self.baseAngle, self.metric))
+        self.generateData()
         fig = self.createFigure()
         self.overview.figure = fig
+
+        self.baseChanged.emit(self.baseAngle, self.baseFilter, self.metric)
+
         self.overview.draw()
         self.update()
-
-    
-    def wasserstein_matrix(self, mu1, var1, mu2, var2):
-        #print( np.trace( var1 ), np.trace( var2 ), np.trace(- 2 * np.transpose( np.transpose(var2) @ var1 @ np.transpose(var2) ) ) )
-        return np.sqrt(
-            np.linalg.norm( mu1.flatten() - mu2.flatten() )**2 + np.sum(
-                var1 + var2 - 2 * np.sqrt( var2 * var1  )
-            )
-        )
