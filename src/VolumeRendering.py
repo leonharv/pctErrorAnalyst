@@ -1,5 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
-from PyQt5.QtCore import pyqtSlot
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSlider
+from PyQt5.QtCore import Qt, pyqtSlot
+from qtrangeslider import QRangeSlider
 
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import vtkmodules.vtkRenderingOpenGL2
@@ -15,8 +16,10 @@ from vtkmodules.vtkRenderingCore import (
 from vtkmodules.vtkRenderingVolume import vtkGPUVolumeRayCastMapper
 from vtkmodules.vtkCommonDataModel import vtkPiecewiseFunction
 from vtkmodules.vtkRenderingCore import (
-    vtkRenderer
+    vtkRenderer,
+    vtkCamera
 )
+from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor
 
 import numpy as np
 import metrics
@@ -36,56 +39,82 @@ class VolumeRendering(QWidget):
         self.compareAngle = 101
         self.compareFilter = 'ramp'
 
+        self.camera = None
+
         layout = QVBoxLayout()
         self.setLayout(layout)
 
         self.renderWindowInteractor = QVTKRenderWindowInteractor(self)
         layout.addWidget(self.renderWindowInteractor)
 
+        self.opacityScaleWidget = QSlider(Qt.Horizontal)
+        self.opacityScaleWidget.setMinimum(0)
+        self.opacityScaleWidget.setMaximum(100)
+        self.opacityScaleWidget.setValue(100)
+        self.opacityScaleWidget.valueChanged.connect(self.onOpacityChanged)
+        layout.addWidget(self.opacityScaleWidget)
+
+        self.dataRangeSlider = QRangeSlider(Qt.Horizontal)
+        self.dataRangeSlider.setMinimum(0)
+        self.dataRangeSlider.setMaximum(100)
+        self.dataRangeSlider.setValue((0, 100))
+        self.dataRangeSlider.valueChanged.connect(self.onDataRangeChanged)
+        layout.addWidget(self.dataRangeSlider)
+
         self.renderWindow = self.renderWindowInteractor.GetRenderWindow()
+
+        self.loadData()
 
         self.renderer = self.createRenderer()
         self.renderWindow.AddRenderer(self.renderer)
 
+        self.renderWindow.SetSize(800,600)
         self.renderWindowInteractor.Initialize()
         self.renderWindowInteractor.Start()
+
+    def loadData(self):
+        logger.info('Loading base %s, %d', self.baseFilter, self.baseAngle)
+        self.meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.baseAngle, self.baseFilter))
+        self.varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.baseAngle, self.baseFilter))
+
+        logger.info('Loading compare %s, %d', self.compareFilter, self.compareAngle)
+        self.meanCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.compareAngle, self.compareFilter))
+        self.varianceCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.compareAngle, self.compareFilter))
+
+        logger.info('Comparing with %s', self.metric)
+        if self.metric == 'wasserstein':
+            self.difference = metrics.wasserstein(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
+        elif self.metric == 'kullback-leibler':
+            self.difference = metrics.kullback_leibler(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
+        else:
+            self.difference = metrics.wasserstein(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
+
+        differenceOrdered = np.ravel(self.difference, order='F')
+        self.differenceString = differenceOrdered.tostring()
 
     def createRenderer(self):
 
         renderer = vtkRenderer()
 
-        logger.info('Loading base %s, %d', self.baseFilter, self.baseAngle)
-        meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.baseAngle, self.baseFilter))
-        varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.baseAngle, self.baseFilter))
-
-        logger.info('Loading compare %s, %d', self.compareFilter, self.compareAngle)
-        meanCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.compareAngle, self.compareFilter))
-        varianceCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.compareAngle, self.compareFilter))
-
-        logger.info('Comparing with %s', self.metric)
-        if self.metric == 'wasserstein':
-            difference = metrics.wasserstein(meanBase, varianceBase, meanCompare, varianceCompare)
-        elif self.metric == 'kullback-leibler':
-            difference = metrics.kullback_leibler(meanBase, varianceBase, meanCompare, varianceCompare)
-        else:
-            difference = metrics.wasserstein(meanBase, varianceBase, meanCompare, varianceCompare)
-
-        differenceOrdered = np.ravel(difference, order='F')
-        differenceString = differenceOrdered.tostring()
-
         imageImporter = vtkImageImport()
-        imageImporter.CopyImportVoidPointer(differenceString, len(differenceString))
+        imageImporter.CopyImportVoidPointer(self.differenceString, len(self.differenceString))
         imageImporter.SetDataScalarTypeToDouble()
         imageImporter.SetNumberOfScalarComponents(1)
-        imageImporter.SetDataExtent(0, meanBase.shape[0]-1, 0, meanBase.shape[1]-1, 0, meanBase.shape[2]-1)
-        imageImporter.SetWholeExtent(0, meanBase.shape[0]-1, 0, meanBase.shape[1]-1, 0, meanBase.shape[2]-1)
+        imageImporter.SetDataExtent(0, self.meanBase.shape[0]-1, 0, self.meanBase.shape[1]-1, 0, self.meanBase.shape[2]-1)
+        imageImporter.SetWholeExtent(0, self.meanBase.shape[0]-1, 0, self.meanBase.shape[1]-1, 0, self.meanBase.shape[2]-1)
+
+        dataValueScale = self.dataRangeSlider.value()
+
+        differenceRange = self.difference.max() - self.difference.min()
+
+        minValue = self.difference.min() + differenceRange * dataValueScale[0] / 100.
+        maxValue = self.difference.min() + differenceRange * dataValueScale[1] / 100.
+        valueRange = maxValue - minValue
 
         alphaChannelFunc = vtkPiecewiseFunction()
-        alphaChannelFunc.AddPoint(difference.min(), 0.0)
-        alphaChannelFunc.AddPoint(difference.max(), 1.0)
-
-        minValue = difference.min()
-        valueRange = difference.max() - minValue
+        alphaChannelFunc.AddPoint(minValue, 0.0)
+        alphaChannelFunc.AddPoint(maxValue, self.opacityScaleWidget.value()/100.)
+        alphaChannelFunc.AddPoint(maxValue + 0.001, 0)
 
         colorFunc = vtkColorTransferFunction()
         with open('../etc/colormap/nic_CubicL.json') as file:
@@ -96,13 +125,13 @@ class VolumeRendering(QWidget):
             RGBPoints[:,0] /= RGBPoints[:,0].max()
             for value, red, green, blue in RGBPoints:
                 colorFunc.AddRGBPoint(value * valueRange + minValue, red, green, blue)
-            else:
-                colorFunc.AddRGBPoint(difference.min(), 0.0, 0.0, 0.0)
-                colorFunc.AddRGBPoint(difference.max(), 0.0, 0.0, 1.0)
 
         volumeProperty = vtkVolumeProperty()
         volumeProperty.SetColor(colorFunc)
         volumeProperty.SetScalarOpacity(alphaChannelFunc)
+
+        scalarBar = vtkScalarBarActor()
+        scalarBar.SetLookupTable(colorFunc)
 
         volumeMapper = vtkGPUVolumeRayCastMapper()
         volumeMapper.SetInputConnection(imageImporter.GetOutputPort())
@@ -112,6 +141,14 @@ class VolumeRendering(QWidget):
         volume.SetProperty(volumeProperty)
 
         renderer.AddVolume(volume)
+        renderer.AddActor2D(scalarBar)
+
+        if self.camera == None:
+            self.camera = renderer.GetActiveCamera()
+            renderer.ResetCamera()
+        else:
+            renderer.SetActiveCamera(self.camera)
+            
 
         renderer.SetBackground(1, 1, 1)
 
@@ -124,6 +161,7 @@ class VolumeRendering(QWidget):
         self.baseFilter = filter
         self.metric = metric
 
+        self.loadData()
         self.update()
 
     @pyqtSlot(int, str)
@@ -131,6 +169,15 @@ class VolumeRendering(QWidget):
         self.compareAngle = angle
         self.compareFilter = filter
 
+        self.loadData()
+        self.update()
+
+    @pyqtSlot()
+    def onOpacityChanged(self):
+        self.update()
+
+    @pyqtSlot()
+    def onDataRangeChanged(self):
         self.update()
 
     def update(self):
