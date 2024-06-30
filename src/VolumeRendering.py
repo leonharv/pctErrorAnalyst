@@ -1,4 +1,10 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSlider
+from PyQt5.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QSlider,
+    QLabel,
+    QCheckBox
+)
 from PyQt5.QtCore import Qt, pyqtSlot
 from qtrangeslider import QRangeSlider
 
@@ -16,10 +22,13 @@ from vtkmodules.vtkRenderingCore import (
 from vtkmodules.vtkRenderingVolume import vtkGPUVolumeRayCastMapper
 from vtkmodules.vtkCommonDataModel import vtkPiecewiseFunction
 from vtkmodules.vtkRenderingCore import (
-    vtkRenderer,
-    vtkCamera
+    vtkPolyDataMapper,
+    vtkRenderer
 )
+from vtkmodules.vtkRenderingLOD import vtkLODActor
 from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor
+from vtkmodules.vtkFiltersCore import vtkMarchingCubes
+from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
 
 import numpy as np
 import metrics
@@ -47,19 +56,38 @@ class VolumeRendering(QWidget):
         self.renderWindowInteractor = QVTKRenderWindowInteractor(self)
         layout.addWidget(self.renderWindowInteractor)
 
+        opacityScaleLabel = QLabel('Opacity scale')
+        layout.addWidget(opacityScaleLabel)
+
         self.opacityScaleWidget = QSlider(Qt.Horizontal)
         self.opacityScaleWidget.setMinimum(0)
         self.opacityScaleWidget.setMaximum(100)
         self.opacityScaleWidget.setValue(100)
-        self.opacityScaleWidget.valueChanged.connect(self.onOpacityChanged)
+        self.opacityScaleWidget.valueChanged.connect(self.updateRendering)
         layout.addWidget(self.opacityScaleWidget)
+
+        dataRangeLabel = QLabel('Data range')
+        layout.addWidget(dataRangeLabel)
 
         self.dataRangeSlider = QRangeSlider(Qt.Horizontal)
         self.dataRangeSlider.setMinimum(0)
         self.dataRangeSlider.setMaximum(100)
         self.dataRangeSlider.setValue((0, 100))
-        self.dataRangeSlider.valueChanged.connect(self.onDataRangeChanged)
+        self.dataRangeSlider.valueChanged.connect(self.updateRendering)
         layout.addWidget(self.dataRangeSlider)
+
+        self.lcpCheckbox = QCheckBox('Show LCP')
+        self.lcpCheckbox.setChecked(False)
+        self.lcpCheckbox.stateChanged.connect(self.onLCPShow)
+        layout.addWidget(self.lcpCheckbox)
+
+        self.lcpSlider = QSlider(Qt.Horizontal)
+        self.lcpSlider.hide()
+        self.lcpSlider.setMinimum(0)
+        self.lcpSlider.setMaximum(100)
+        self.lcpSlider.setValue(50)
+        self.lcpSlider.valueChanged.connect(self.updateRendering)
+        layout.addWidget(self.lcpSlider)
 
         self.renderWindow = self.renderWindowInteractor.GetRenderWindow()
 
@@ -77,15 +105,25 @@ class VolumeRendering(QWidget):
         self.meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.baseAngle, self.baseFilter))
         self.varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.baseAngle, self.baseFilter))
 
+        self.meanBase = self.meanBase[:,:,22:110]
+        self.varianceBase = self.varianceBase[:,:,22:110]
+
         logger.info('Loading compare %s, %d', self.compareFilter, self.compareAngle)
         self.meanCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.compareAngle, self.compareFilter))
         self.varianceCompare = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.compareAngle, self.compareFilter))
+
+        self.meanCompare = self.meanCompare[:,:,22:110]
+        self.varianceCompare = self.varianceCompare[:,:,22:110]
 
         logger.info('Comparing with %s', self.metric)
         if self.metric == 'wasserstein':
             self.difference = metrics.wasserstein(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
         elif self.metric == 'kullback-leibler':
             self.difference = metrics.kullback_leibler(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
+        elif self.metric == 'mean':
+            self.difference = self.meanBase - self.meanCompare
+        elif self.metric == 'variance':
+            self.difference = self.varianceBase - self.varianceCompare
         else:
             self.difference = metrics.wasserstein(self.meanBase, self.varianceBase, self.meanCompare, self.varianceCompare)
 
@@ -140,6 +178,43 @@ class VolumeRendering(QWidget):
         volume.SetMapper(volumeMapper)
         volume.SetProperty(volumeProperty)
 
+        if self.lcpCheckbox.isChecked():
+            meanRange = self.meanBase.max() - self.meanBase.min()
+            isoValue = self.lcpSlider.value() / 100 * meanRange + self.meanBase.min()
+
+            LCP1 = metrics.lcp(isoValue, self.meanBase, self.varianceBase)
+
+            lcpOrdered = np.ravel(LCP1, order='F')
+            lcpString = lcpOrdered.tostring()
+
+            lcpImporter = vtkImageImport()
+            lcpImporter.CopyImportVoidPointer(lcpString, len(lcpString))
+            lcpImporter.SetDataScalarTypeToDouble()
+            lcpImporter.SetNumberOfScalarComponents(1)
+            lcpImporter.SetDataExtent(0, self.meanBase.shape[0]-1, 0, self.meanBase.shape[1]-1, 0, self.meanBase.shape[2]-1)
+            lcpImporter.SetWholeExtent(0, self.meanBase.shape[0]-1, 0, self.meanBase.shape[1]-1, 0, self.meanBase.shape[2]-1)
+
+            marchingCubes = vtkMarchingCubes()
+            marchingCubes.SetInputConnection( lcpImporter.GetOutputPort() )
+            marchingCubes.ComputeNormalsOn()
+            marchingCubes.SetValue( 0, 0.49 )
+
+            geoVolumeBone = vtkGeometryFilter()
+            geoVolumeBone.SetInputConnection( marchingCubes.GetOutputPort() )
+
+            geoBoneMapper = vtkPolyDataMapper()
+            geoBoneMapper.SetInputConnection( geoVolumeBone.GetOutputPort() )
+            geoBoneMapper.ScalarVisibilityOff()
+
+            actorBone = vtkLODActor()
+            actorBone.SetNumberOfCloudPoints( 1000000 )
+            actorBone.SetMapper( geoBoneMapper )
+            actorBone.GetProperty().SetColor( 1, 1, 1 )
+            actorBone.GetProperty().SetOpacity( 1.0 )
+
+            renderer.AddActor(actorBone)
+
+
         renderer.AddVolume(volume)
         renderer.AddActor2D(scalarBar)
 
@@ -153,7 +228,6 @@ class VolumeRendering(QWidget):
         renderer.SetBackground(1, 1, 1)
 
         return renderer
-
 
     @pyqtSlot(int, str, str)
     def setBase(self, angle, filter, metric):
@@ -173,11 +247,16 @@ class VolumeRendering(QWidget):
         self.update()
 
     @pyqtSlot()
-    def onOpacityChanged(self):
+    def updateRendering(self):
         self.update()
 
     @pyqtSlot()
-    def onDataRangeChanged(self):
+    def onLCPShow(self):
+        if self.lcpCheckbox.isChecked():
+            self.lcpSlider.show()
+        else:
+            self.lcpSlider.hide()
+
         self.update()
 
     def update(self):

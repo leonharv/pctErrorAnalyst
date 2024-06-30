@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import special
 
 def wasserstein(mu1, var1, mu2, var2):
     return np.sqrt(
@@ -21,3 +22,7 @@ def kullback_leibler(mu1, var1, mu2, var2):
 def kullback_leibler_matrix(mu1, var1, mu2, var2):
     # KL is additive for independent distributions
     return np.sum( kullback_leibler(mu1, var1, mu2, var2) )
+
+def lcp(contour, mean, variance):
+    inner = (mean - contour) / (np.sqrt(2)*variance)
+    return 0.5 * ( 1 - special.erf(inner)**2 )

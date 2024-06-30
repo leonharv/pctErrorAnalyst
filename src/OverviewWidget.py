@@ -21,7 +21,7 @@ class OverviewWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.availableMetrics = ['wasserstein', 'kullback-leibler']
+        self.availableMetrics = ['wasserstein', 'kullback-leibler', 'mean', 'variance']
         self.availableFilters = ['ramp', 'cosine', 'hamming', 'hann', 'shepp-logan']
         self.availableAngles = [int( 180 * angle / 16) for angle in np.arange(8, 17)]
 
@@ -45,6 +45,9 @@ class OverviewWidget(QWidget):
         meanBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(self.baseAngle, self.baseFilter))
         varianceBase = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(self.baseAngle, self.baseFilter))
 
+        meanBase = meanBase[:,:,22:110]
+        varianceBase = varianceBase[:,:,22:110]
+
         self.data = np.zeros((5,9))
         for idx,filter in enumerate(self.availableFilters):
             for jdx,angle in enumerate(self.availableAngles):
@@ -56,10 +59,17 @@ class OverviewWidget(QWidget):
                 mean = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Reconstruction/3D/RSP_angles{:d}_offset1_spotx130_exact_{:s}.npy'.format(angle, filter))
                 variance = np.load('/home/vik/Dokumente/Promotion/pCT/uncertainty-vis/Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset1_spotx130_exact_{:s}_190_1226.npy'.format(angle, filter))
 
+                mean = mean[:,:,22:110]
+                variance = variance[:,:,22:110]
+
                 if self.metric == 'wasserstein':
                     self.data[idx, jdx] = metrics.wasserstein_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
                 elif self.metric == 'kullback-leibler':
                     self.data[idx, jdx] = metrics.kullback_leibler_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
+                elif self.metric == 'mean':
+                    self.data[idx, jdx] = np.linalg.norm( meanBase.flatten() - mean.flatten() )
+                elif self.metric == 'variance':
+                    self.data[idx, jdx] = np.linalg.norm( varianceBase.flatten() - variance.flatten() )
                 else:
                     self.data[idx, jdx] = metrics.wasserstein_matrix(meanBase.flatten(), varianceBase.flatten(), mean.flatten(), variance.flatten())
 
@@ -122,6 +132,8 @@ class OverviewWidget(QWidget):
         self.metricSelection = QComboBox()
         self.metricSelection.addItem('Wasserstein')
         self.metricSelection.addItem('Kullback-Leibler')
+        self.metricSelection.addItem('Mean')
+        self.metricSelection.addItem('Variance')
         layout.addWidget(self.metricSelection)
         self.metricSelection.currentIndexChanged.connect(self.on_baseChanged)
 
